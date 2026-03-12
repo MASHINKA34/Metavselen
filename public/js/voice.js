@@ -5,7 +5,6 @@
 var Voice = {
   enabled: false,
   stream: null,
-  audioCtx: null,
   peers: {}, // id -> { pc, gainNode }
 
   async toggle() {
@@ -22,9 +21,7 @@ var Voice = {
       return;
     }
 
-    // Resume AudioContext after user gesture (required by all browsers)
-    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (this.audioCtx.state === 'suspended') await this.audioCtx.resume();
+    // AudioContext больше не нужен — используем <audio> элементы (надёжнее)
 
     this.enabled = true;
     document.getElementById('voice-btn').classList.add('active');
@@ -49,10 +46,11 @@ var Voice = {
   disable() {
     this.stream?.getTracks().forEach(t => t.stop());
     this.stream = null;
-    Object.values(this.peers).forEach(p => { try { p.pc.close(); } catch {} });
+    Object.values(this.peers).forEach(p => {
+      try { p.pc.close(); } catch {}
+      if (p.audioEl) { p.audioEl.srcObject = null; p.audioEl.remove(); }
+    });
     this.peers = {};
-    this.audioCtx?.close();
-    this.audioCtx = null;
     this.enabled = false;
     document.getElementById('voice-btn').classList.remove('active');
     document.getElementById('icon-mic').style.display = '';
@@ -180,14 +178,18 @@ var Voice = {
 
     pc.ontrack = (e) => {
       console.log('[Voice] Got remote audio track from', remoteId);
-      if (!this.audioCtx) return;
-      if (this.audioCtx.state === 'suspended') this.audioCtx.resume();
-      const src  = this.audioCtx.createMediaStreamSource(e.streams[0]);
-      const gain = this.audioCtx.createGain();
-      gain.gain.value = 1.0;
-      src.connect(gain);
-      gain.connect(this.audioCtx.destination);
-      if (this.peers[remoteId]) this.peers[remoteId].gainNode = gain;
+      // <audio> элемент — самый надёжный способ воспроизвести WebRTC аудио.
+      // AudioContext.createMediaStreamSource() часто зависает в браузерах.
+      const audio = document.createElement('audio');
+      audio.autoplay = true;
+      audio.volume   = 1.0;
+      audio.srcObject = e.streams[0];
+      // Нужно добавить в DOM, иначе некоторые браузеры не воспроизводят
+      audio.style.cssText = 'position:fixed;width:0;height:0;opacity:0;pointer-events:none;';
+      document.body.appendChild(audio);
+      // Явный play() на случай если autoplay заблокирован
+      audio.play().catch(err => console.warn('[Voice] audio.play() blocked:', err));
+      if (this.peers[remoteId]) this.peers[remoteId].audioEl = audio;
     };
 
     pc.onicecandidate = (e) => {
@@ -205,26 +207,30 @@ var Voice = {
       if (s === 'failed') this.removePeer(remoteId);
     };
 
-    this.peers[remoteId] = { pc, gainNode: null };
+    this.peers[remoteId] = { pc, audioEl: null };
     return pc;
   },
 
   removePeer(id) {
     if (this.peers[id]) {
       try { this.peers[id].pc.close(); } catch {}
+      if (this.peers[id].audioEl) {
+        this.peers[id].audioEl.srcObject = null;
+        this.peers[id].audioEl.remove();
+      }
       delete this.peers[id];
     }
   },
 
-  // ── Spatial audio (volume drops with distance) ────────────────────────────
+  // ── Spatial audio — volume by distance via audio element ─────────────────
   updatePositions(myPos, others) {
-    if (!this.audioCtx || !this.enabled) return;
+    if (!this.enabled) return;
     others.forEach(({ id, pos }) => {
       const peer = this.peers[id];
-      if (!peer?.gainNode) return;
+      if (!peer?.audioEl) return;
       const dist = myPos.distanceTo(pos);
-      const vol  = Math.max(0, 1 - dist / 25) ** 2;
-      peer.gainNode.gain.setTargetAtTime(vol, this.audioCtx.currentTime, 0.1);
+      // Линейное затухание: слышно до 25 единиц, тихнет квадратично
+      peer.audioEl.volume = Math.max(0, 1 - dist / 25) ** 2;
     });
   }
 };
