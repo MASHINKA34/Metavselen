@@ -5,7 +5,9 @@
 var Voice = {
   enabled: false,
   stream: null,
-  peers: {}, // id -> { pc, gainNode }
+  peers: {}, // id -> { pc, audioEl }
+  _retryTimer: null,
+  _connectedPeers: new Set(), // track ids with live audio
 
   async toggle() {
     this.enabled ? this.disable() : await this.enable();
@@ -24,10 +26,11 @@ var Voice = {
     // AudioContext больше не нужен — используем <audio> элементы (надёжнее)
 
     this.enabled = true;
+    this._connectedPeers.clear();
     document.getElementById('voice-btn').classList.add('active');
     document.getElementById('icon-mic').style.display = 'none';
     document.getElementById('icon-vol').style.display = '';
-    document.getElementById('voice-label').textContent = 'Говорю';
+    this._setLabel('Подключение…');
 
     console.log('[Voice] Enabled. My ID:', Network.myId);
 
@@ -41,9 +44,13 @@ var Voice = {
         this._initiate(id);
       }
     });
+
+    // Auto-retry every 7 s until at least one peer is connected
+    this._startRetry();
   },
 
   disable() {
+    this._stopRetry();
     this.stream?.getTracks().forEach(t => t.stop());
     this.stream = null;
     Object.values(this.peers).forEach(p => {
@@ -51,11 +58,12 @@ var Voice = {
       if (p.audioEl) { p.audioEl.srcObject = null; p.audioEl.remove(); }
     });
     this.peers = {};
+    this._connectedPeers.clear();
     this.enabled = false;
     document.getElementById('voice-btn').classList.remove('active');
     document.getElementById('icon-mic').style.display = '';
     document.getElementById('icon-vol').style.display = 'none';
-    document.getElementById('voice-label').textContent = 'Голос';
+    this._setLabel('Голос');
   },
 
   // Another player announced voice_ready
@@ -190,6 +198,9 @@ var Voice = {
       // Явный play() на случай если autoplay заблокирован
       audio.play().catch(err => console.warn('[Voice] audio.play() blocked:', err));
       if (this.peers[remoteId]) this.peers[remoteId].audioEl = audio;
+      // Mark as connected and update label
+      this._connectedPeers.add(remoteId);
+      this._setLabel('Говорю ✓');
     };
 
     pc.onicecandidate = (e) => {
@@ -220,6 +231,49 @@ var Voice = {
       }
       delete this.peers[id];
     }
+    this._connectedPeers.delete(id);
+    if (this.enabled && this._connectedPeers.size === 0) {
+      this._setLabel('Подключение…');
+    }
+  },
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  _setLabel(text) {
+    const el = document.getElementById('voice-label');
+    if (el) el.textContent = text;
+  },
+
+  _startRetry() {
+    this._stopRetry();
+    this._retryTimer = setInterval(() => {
+      if (!this.enabled) { this._stopRetry(); return; }
+
+      // Drop any peers that are not connected/connecting
+      Object.keys(this.peers).forEach(id => {
+        const state = this.peers[id].pc.connectionState;
+        if (state !== 'connected' && state !== 'connecting') {
+          console.log('[Voice] Retry: dropping dead peer', id, '(', state, ')');
+          this.removePeer(id);
+        }
+      });
+
+      // Re-announce and re-initiate to everyone not yet connected
+      const hasActivePeers = Object.keys(this.peers).length > 0;
+      if (!hasActivePeers) {
+        console.log('[Voice] Retry: re-emitting voice_ready');
+        Network.socket.emit('voice_ready');
+        Object.keys(Network.others).forEach(id => {
+          if (Network.myId < id && !this.peers[id]) {
+            console.log('[Voice] Retry: initiating to', id);
+            this._initiate(id);
+          }
+        });
+      }
+    }, 7000);
+  },
+
+  _stopRetry() {
+    if (this._retryTimer) { clearInterval(this._retryTimer); this._retryTimer = null; }
   },
 
   // ── Spatial audio — volume by distance via audio element ─────────────────
