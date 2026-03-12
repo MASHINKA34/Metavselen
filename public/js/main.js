@@ -39,6 +39,7 @@
     if (Network.joined) {
       updateLocalPlayer(dt);
       updateOtherPlayers(dt);
+      ChatBubbles.tick(dt);
       Network.sendMove(localPlayer.position, localPlayer.rotY);
       Voice.updatePositions(localPlayer.position, getOthersPositions());
     }

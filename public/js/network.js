@@ -88,6 +88,10 @@ var Network = {
     s.on('chat', ({ id, name, color, msg }) => {
       const nameHtml = `<span class="name" style="color:${color||'#fff'}">${_esc(name)}</span>`;
       this._chatMsg(`${nameHtml}: ${_esc(msg)}`);
+
+      // Floating bubble above the sender's avatar
+      const targetMesh = (id === Network.myId) ? localPlayer.mesh : Network.others[id]?.mesh;
+      if (targetMesh) ChatBubbles.show(Network.scene, targetMesh, msg, color);
     });
 
     // WebRTC signals

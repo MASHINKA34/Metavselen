@@ -184,15 +184,20 @@ function resolveCollisions(pos) {
 function updateLocalPlayer(dt) {
   if (!localPlayer.mesh) return;
 
+  // Block all keyboard controls while chat input is focused
+  const chatFocused = document.activeElement === document.getElementById('chat-input');
+
   const fwd   = new THREE.Vector3(-Math.sin(camYaw), 0, -Math.cos(camYaw));
   const right = new THREE.Vector3( Math.cos(camYaw), 0, -Math.sin(camYaw));
   const spd   = localPlayer.speed * dt;
   let moved   = false;
 
-  if (keys['KeyW'] || keys['ArrowUp'])    { localPlayer.position.addScaledVector(fwd,   spd);  moved = true; }
-  if (keys['KeyS'] || keys['ArrowDown'])  { localPlayer.position.addScaledVector(fwd,  -spd);  moved = true; }
-  if (keys['KeyA'] || keys['ArrowLeft'])  { localPlayer.position.addScaledVector(right, -spd); moved = true; }
-  if (keys['KeyD'] || keys['ArrowRight']) { localPlayer.position.addScaledVector(right,  spd); moved = true; }
+  if (!chatFocused) {
+    if (keys['KeyW'] || keys['ArrowUp'])    { localPlayer.position.addScaledVector(fwd,   spd);  moved = true; }
+    if (keys['KeyS'] || keys['ArrowDown'])  { localPlayer.position.addScaledVector(fwd,  -spd);  moved = true; }
+    if (keys['KeyA'] || keys['ArrowLeft'])  { localPlayer.position.addScaledVector(right, -spd); moved = true; }
+    if (keys['KeyD'] || keys['ArrowRight']) { localPlayer.position.addScaledVector(right,  spd); moved = true; }
+  }
 
   if (Math.abs(joystick.x) > 0.08 || Math.abs(joystick.y) > 0.08) {
     localPlayer.position.addScaledVector(right, joystick.x * spd);
@@ -200,8 +205,8 @@ function updateLocalPlayer(dt) {
     moved = true;
   }
 
-  // Jump (Space or mobile button)
-  if ((keys['Space'] || keys['_jump']) && _onGround) {
+  // Jump (Space or mobile button) — also blocked when chat is focused
+  if (!chatFocused && (keys['Space'] || keys['_jump']) && _onGround) {
     _velY = JUMP_V;
     _onGround = false;
   }
